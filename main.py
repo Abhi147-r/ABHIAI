@@ -247,8 +247,8 @@ def groq_answer(message, history, document=None):
     messages.append({"role": "user", "content": message})
     # SPEED: tez Groq model pehle (file ho to bada model pehle), HF sirf aakhri backup
     has_doc = bool(doc_message(document))
-    fast = os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant")
-    big = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    fast = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")
+    big = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
     chain = []
     if hf_token:
         chain.append((HF_URL, hf_token, os.getenv("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct")))
@@ -482,8 +482,8 @@ def chat_stream():
             hf_token = os.getenv("HF_TOKEN", "").strip()
             providers = []
             hf_provider = (HF_URL, hf_token, os.getenv("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct")) if hf_token else None
-            groq_fast = (GROQ_URL, groq_key, os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant")) if groq_key else None
-            groq_big = (GROQ_URL, groq_key, os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")) if groq_key else None
+            groq_fast = (GROQ_URL, groq_key, os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")) if groq_key else None
+            groq_big = (GROQ_URL, groq_key, os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")) if groq_key else None
             if voice:
                 # Call mode: use the low-latency route first; keep smarter providers as recovery.
                 providers.extend(x for x in (groq_fast, hf_provider, groq_big) if x)
@@ -831,7 +831,7 @@ def english_image_prompt(text):
                                           "(subject, setting, style, lighting). Output only the prompt, under 60 words. No quotes."},
             {"role": "user", "content": text},
         ]
-        out = _chat_completion(GROQ_URL, key, os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant"), msgs)
+        out = _chat_completion(GROQ_URL, key, os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"), msgs)
         return out.strip()[:1500] or text
     except Exception as exc:
         app.logger.warning("image prompt translate error: %s", exc)
@@ -894,8 +894,8 @@ def make_chart():
     if hf_token:
         providers.append((HF_URL, hf_token, os.getenv("HF_MODEL", "Qwen/Qwen2.5-72B-Instruct")))
     if groq_key:
-        providers.extend([(GROQ_URL, groq_key, os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant")),
-                          (GROQ_URL, groq_key, os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"))])
+        providers.extend([(GROQ_URL, groq_key, os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")),
+                          (GROQ_URL, groq_key, os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"))])
     raw = None
     for url, key, model in providers:
         try:
@@ -947,3 +947,4 @@ threading.Thread(target=warm_up, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False, use_reloader=False, threaded=True)
+
