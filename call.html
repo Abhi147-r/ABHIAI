@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Abhi AI — Call</title><style>
+:root{--ink:#050505;--panel:#101012;--line:#2b2b2e;--sand:#efe4d2;--dim:#a29e96;--amber:#f3b562;--rose:#e0566f}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 22%,#352719 0,transparent 30%),var(--ink);color:var(--sand);font-family:Arial,Helvetica,sans-serif}.call-page{min-height:100vh;max-width:620px;margin:auto;padding:22px 20px 26px;display:flex;flex-direction:column}.call-top{display:flex;justify-content:space-between;align-items:center;color:var(--dim);font-size:13px}.back{border:1px solid var(--line);color:var(--sand);background:transparent;border-radius:999px;padding:8px 13px;cursor:pointer}.live{color:#9df3af}.live i{display:inline-block;width:8px;height:8px;background:#65d878;border-radius:50%;margin-right:6px;box-shadow:0 0 10px #65d878}.call-center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.portrait-wrap{width:220px;height:275px;position:relative;margin-bottom:25px}.portrait{position:absolute;inset:15px 28px 0;border-radius:120px 120px 32px 32px;background:radial-gradient(circle at 50% 33%,#f5d2ae 0 12%,transparent 12.5%),linear-gradient(145deg,#2d241c,#956d46 45%,#221a13 46%);border:1px solid #f3b56299;box-shadow:0 0 0 12px #f3b5620d,0 25px 70px #000}.portrait:before{content:"A";position:absolute;inset:0;display:grid;place-items:center;font-size:82px;font-weight:800;color:#efe4d2;text-shadow:0 0 25px #f3b562;opacity:.9}.ring{position:absolute;inset:0;border:1px solid #f3b56288;border-radius:50%;transform:rotateX(70deg);animation:orbit 7s linear infinite}.ring.two{inset:12px -13px;border-color:#efe4d233;animation-duration:11s;animation-direction:reverse}.call-center h1{font-size:30px;margin:0 0 8px}.sub{color:var(--dim);margin:0 0 26px}.wave{height:34px;display:flex;align-items:center;gap:4px;margin-bottom:24px}.wave b{width:4px;border-radius:5px;background:var(--amber);animation:sound .8s ease-in-out infinite alternate}.wave b:nth-child(1){height:10px}.wave b:nth-child(2){height:22px;animation-delay:.1s}.wave b:nth-child(3){height:34px;animation-delay:.2s}.wave b:nth-child(4){height:18px;animation-delay:.3s}.wave b:nth-child(5){height:27px;animation-delay:.4s}.wave b:nth-child(6){height:12px;animation-delay:.5s}.transcript{width:100%;max-height:120px;overflow:auto;text-align:left;color:var(--dim);font-size:13px;line-height:1.5;background:#101012cc;border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:22px}.controls{display:flex;align-items:center;gap:18px}.control{width:54px;height:54px;border-radius:50%;border:1px solid var(--line);background:#18181a;color:var(--sand);cursor:pointer;font-size:19px}.control.muted{color:var(--rose);border-color:var(--rose)}.end{width:64px;height:64px;border:0;border-radius:50%;background:var(--rose);color:white;font-size:22px;cursor:pointer;box-shadow:0 8px 28px #e0566f66}.hint{font-size:11px;color:var(--dim);margin-top:18px}@keyframes orbit{to{transform:rotateX(70deg) rotateZ(360deg)}}@keyframes sound{to{transform:scaleY(.35)}}@media(max-width:520px){.portrait-wrap{transform:scale(.9);margin-bottom:4px}.call-center h1{font-size:26px}}
+</style></head><body><main class="call-page"><header class="call-top"><button class="back" id="backBtn">← Chat</button><span class="live"><i></i><span id="status">Connecting</span></span></header><section class="call-center"><div class="portrait-wrap"><div class="ring"></div><div class="ring two"></div><div class="portrait"></div></div><h1>Abhi AI</h1><p class="sub" id="sub">Hindi voice assistant</p><div class="wave"><b></b><b></b><b></b><b></b><b></b><b></b></div><div id="transcript" class="transcript">Call starting… speak naturally. Abhi will listen and answer.</div><div class="controls"><button id="muteBtn" class="control" title="Mute">⌕</button><button id="endBtn" class="end" title="End call">■</button><button id="speakerBtn" class="control" title="Speaker">◉</button></div><div class="hint" id="hint">Microphone is starting…</div></section></main><script>
+/* === TUNING ===
+   Browser speech recognition waits 2 seconds after the latest transcript update before sending the complete turn. */
+const ENGINE='browser',ENDPOINT_MS=2000,ECHO_GUARD_MS=850,BARGE_IN=true;
+/* BARGE_IN: true = Abhi bol raha ho aur aap beech me bolo to Abhi turant chup ho jata hai (real call jaisa). Speaker par echo se galti se ruk raha ho to false karo ya headphone lagao. */
+function endpointDelay(){return ENDPOINT_MS;}
+const SILENCE_MS=480,MIN_SPEECH_MS=250,MAX_MS=20000,PRE_MS=350;   // sirf 'sarvam' engine ke liye
+
+const $=s=>document.querySelector(s);
+const transcript=$('#transcript'),statusEl=$('#status'),hint=$('#hint');
+let active=true,muted=false,voiceOn=true,busy=false,history=[],currentAudio=null,ignoreUntil=0,curRes=null,recErrs=0,noSarvam=false,turnCancel=null,curAsk=null,replyText='',carryText='',askLen=0;
+let stream=null,actx=null,analyser=null,buf=null,recorder=null,chunks=[],recording=false;
+let sttFails=0,noise=0.01,calib=[],voiceStart=0,lastVoice=0,recStart=0,useSarvam=(ENGINE==='sarvam'),rec=null,loopTimer=null;
+let baseIdx=0,lastLen=0,pendingText='',epTimer=null,proc=null,frames=[],preroll=[],inRate=48000;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function addLine(label,text){transcript.textContent='';const b=document.createElement('b');b.textContent=label+': ';transcript.append(b,text);transcript.scrollTop=transcript.scrollHeight;}
+function setStatus(t){if(active)statusEl.textContent=t;}
+
+function playUrl(url){return new Promise(res=>{const a=new Audio(url);currentAudio=a;curRes=res;const done=v=>{if(curRes===res)curRes=null;res(v);};a.onended=a.onerror=()=>done(true);a.play().catch(()=>done(false));});}
+function stopAudio(){
+  if(currentAudio){try{currentAudio.pause()}catch(e){}currentAudio=null;}
+  if(curRes){const r=curRes;curRes=null;r(false);}
+  if('speechSynthesis'in window)speechSynthesis.cancel();
+}
+function playB64(b64){return playUrl('data:audio/wav;base64,'+b64);}
+function speak(text){return new Promise(res=>{if(!('speechSynthesis'in window)){res();return}speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang='hi-IN';u.rate=1.05;u.onend=u.onerror=()=>res();speechSynthesis.speak(u);});}
+async function fetchTts(text){try{const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});const d=await r.json();return d.audio_b64||null}catch(e){return null}}
+function cleanForSpeech(raw){let s=String(raw||'').replace(/```[\s\S]*?```/g,' ').replace(/<[^>]*>/g,' ').replace(/https?:\/\/\S+/gi,' ');s=s.split(/\r?\n/).filter(line=>!/^\s*\|.*\|\s*$/.test(line)&&!/^\s*\S.*\t.*$/.test(line)&&!/^\s*[-:| ]{3,}$/.test(line)).join(' ');s=s.replace(/!\[([^\]]*)\]\([^)]*\)/g,'$1').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1');s=s.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F\u200D]/gu,' ').replace(/[%$]/g,' ').replace(/\+/g,' plus ').replace(/=/g,' equals ').replace(/[^\p{L}\p{M}\p{N}\s.,!?;:'"()\-।॥]/gu,' ');return s.replace(/\s+/g,' ').trim()}
+
+/* Jawab STREAM hota hai: pehla vakya aate hi uski awaaz banni shuru, bolna turant start. BARGE-IN: beech me bolne par turn cancel ho jata hai */
+async function ask(text){
+  if(!text||!active)return;
+  busy=true;pendingText='';clearTimeout(epTimer);setStatus('Thinking');addLine('You',text);
+  const jobs=[];let streamDone=false,wake=null,full='',spoken='',aborted=false;
+  const ctl=new AbortController();
+  const poke=()=>{if(wake){const w=wake;wake=null;w();}};
+  turnCancel=()=>{aborted=true;try{ctl.abort()}catch(e){}stopAudio();poke();};
+  curAsk={text,spoken:()=>spoken};replyText='';askLen=lastLen;
+  const player=(async()=>{
+    let i=0;
+    while(!aborted){
+      if(i<jobs.length){
+        const j=jobs[i++];
+        if(j.url){if(voiceOn&&active)await playUrl(j.url);continue;}
+        if(j.skip)continue;
+        if(voiceOn&&active){const b=await j.p;if(aborted)break;setStatus('Speaking');if(b)await playB64(b);else await speak(j.text);}
+        if(!aborted)spoken+=(spoken?' ':'')+j.text;
+      }
+      else if(streamDone)break;
+      else await new Promise(r=>wake=r);
+    }
+  })();
+  try{
+    const r=await fetch('/api/chat_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,history:history.slice(-12),voice:true}),signal:ctl.signal});
+    const reader=r.body.getReader(),dec=new TextDecoder();let sb='';
+    while(!aborted){
+      const {value,done}=await reader.read();if(done)break;
+      sb+=dec.decode(value,{stream:true});let idx;
+      while((idx=sb.indexOf('\n\n'))>=0){
+        const raw=sb.slice(0,idx);sb=sb.slice(idx+2);
+        if(!raw.startsWith('data: '))continue;
+        let ev;try{ev=JSON.parse(raw.slice(6))}catch(e){continue}
+        if(ev.type==='sentence'){full+=(full?' ':'')+ev.text;replyText=full;addLine('Abhi',full);const rawSpeech=typeof ev.speech_text==='string'?ev.speech_text:ev.text,speechText=cleanForSpeech(rawSpeech);jobs.push({text:speechText,p:voiceOn&&speechText?fetchTts(speechText):Promise.resolve(null),skip:!speechText});poke();}
+        else if(ev.type==='abuse'){full=ev.answer;replyText=full;addLine('Abhi',full);jobs.push({text:'',p:null,url:ev.audio_url});poke();}
+        else if(ev.type==='error_detail'){hint.textContent='Error: '+ev.text;console.warn('chat_stream error:',ev.text);}
+        else if(ev.type==='done'){if(ev.answer)full=ev.answer;}
+      }
+    }
+  }catch(e){if(!aborted)addLine('System','Connection problem.');}
+  streamDone=true;poke();
+  await player;
+  if(aborted)return;            // bargeIn() ne history/state pehle hi sambhal liya
+  if(full)history.push({role:'user',content:text},{role:'assistant',content:full});
+  ignoreUntil=Date.now()+ECHO_GUARD_MS;baseIdx=lastLen;
+  turnCancel=null;curAsk=null;replyText='';busy=false;
+  if(!muted)setStatus('Listening');
+}
+
+/* ---------- BARGE-IN: Abhi ke bolte waqt user bole to turant chup ---------- */
+const normW=s=>s.toLowerCase().replace(/[.,!?।'"\-]/g,' ').split(/\s+/).filter(Boolean);
+function isUserVoice(e){
+  if(e.results.length<=askLen)return false;          // purane vakya ka late/final update: user ki nayi awaaz nahi
+  const last=e.results[e.results.length-1][0].transcript||'';
+  const w=normW(last);
+  if(w.length<2&&last.trim().length<5)return false;  // chhota shor / ek chhota shabd: ignore
+  const ref=new Set(normW(replyText));
+  if(!ref.size)return w.length>0;                    // Abhi abhi soch raha hai, bol nahi raha: koi bhi nayi awaaz
+  const novel=w.filter(x=>!ref.has(x)).length;       // Abhi ke apne shabdo ka echo ho to ignore
+  return novel/w.length>=0.5;
+}
+function bargeIn(){
+  const c=curAsk;
+  if(c){const sp=c.spoken();if(sp)history.push({role:'user',content:c.text},{role:'assistant',content:sp+' …'});else carryText=c.text;}
+  if(turnCancel)turnCancel();
+  turnCancel=null;curAsk=null;replyText='';busy=false;ignoreUntil=0;setStatus('Hearing…');
+}
+
+/* ---------- ENGINE 'browser': Chrome live speech + apna fast endpointing ---------- */
+function startWebSpeech(){
+  const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!R){switchToSarvam('Is browser me live speech nahi hai');return}
+  if(!rec){
+    rec=new R();rec.lang='hi-IN';rec.continuous=true;rec.interimResults=true;
+    rec.onstart=()=>{baseIdx=0;lastLen=0;askLen=0;sttFails=0;if(!busy)setStatus('Listening');};
+    rec.onaudiostart=()=>{if(active&&!muted)hint.textContent='Bolna band karein; 2 seconds baad Abhi jawab dega';};
+    rec.onresult=e=>{
+      recErrs=0;lastLen=e.results.length;
+      if(muted){baseIdx=lastLen;clearTimeout(epTimer);return}
+      if(busy){
+        if(BARGE_IN&&isUserVoice(e)){bargeIn();baseIdx=e.results.length-1;}
+        else{baseIdx=lastLen;return}
+      }else if(Date.now()<ignoreUntil){baseIdx=lastLen;clearTimeout(epTimer);return}
+      let txt='',fin=false;
+      for(let i=baseIdx;i<e.results.length;i++){txt+=e.results[i][0].transcript+' ';fin=e.results[i].isFinal;}
+      txt=txt.trim();if(!txt)return;
+      pendingText=txt;setStatus('Hearing…');addLine('You…',(carryText?carryText+' ':'')+txt);
+      clearTimeout(epTimer);
+      epTimer=setTimeout(()=>{if(busy||muted)return;let t=pendingText;pendingText='';baseIdx=lastLen;if(carryText){t=(carryText+' '+t).trim();carryText='';}if(t)ask(t);},endpointDelay(txt,fin));
+    };
+    rec.onerror=e=>{
+      if(e.error==='not-allowed'){active=false;hint.textContent='Mic permission band hai. Allow karke reload karein.';setStatus('Mic blocked');return;}
+      if(e.error==='service-not-allowed'&&!noSarvam){switchToSarvam('Chrome speech service blocked');return;}
+      if(e.error==='service-not-allowed'){active=false;hint.textContent='Chrome speech service blocked hai.';setStatus('Mic blocked');return;}
+      if(e.error==='no-speech'||e.error==='aborted'){if(active&&!muted&&!busy)setStatus('Listening');return;}
+      recErrs++;hint.textContent='Speech error: '+e.error;
+      if(recErrs>=2&&(e.error==='network'||e.error==='audio-capture'||e.error==='language-not-supported')&&!noSarvam){switchToSarvam('Chrome speech nahi chal raha ('+e.error+')');return;}
+      if(active&&!muted&&!busy)setStatus('Listening');
+    };
+    rec.onend=()=>{if(active&&!muted)setTimeout(()=>{try{rec.start()}catch(e){}},60)};
+  }
+  try{rec.start()}catch(e){}
+}
+function switchToBrowser(){useSarvam=false;clearTimeout(loopTimer);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}if(actx){try{actx.close()}catch(e){}actx=null;analyser=null;}hint.textContent='Chrome speech se sun raha hu';startWebSpeech();}
+
+/* ---------- ENGINE 'sarvam': open mic + VAD -> Sarvam STT ---------- */
+function rms(){analyser.getByteTimeDomainData(buf);let s=0;for(let i=0;i<buf.length;i++){const v=(buf[i]-128)/128;s+=v*v}return Math.sqrt(s/buf.length);}
+/* Awaaz seedha PCM me pakadte hain (pehle 350ms ka pre-roll bhi): shuru ke shabd katte nahi, aur 16kHz WAV banakar server (Groq Whisper) ko bhejte hain */
+function initPcm(src){
+  inRate=actx.sampleRate;
+  proc=actx.createScriptProcessor(2048,1,1);
+  proc.onaudioprocess=e=>{
+    const d=new Float32Array(e.inputBuffer.getChannelData(0));
+    if(recording)frames.push(d);
+    else{preroll.push(d);const keep=Math.ceil(PRE_MS/1000*inRate/2048)+1;while(preroll.length>keep)preroll.shift();}
+  };
+  src.connect(proc);proc.connect(actx.destination);   // output khali (silent) hai; connect isliye ki callback chalta rahe
+}
+function toWav(list){
+  let n=0;list.forEach(f=>n+=f.length);
+  const all=new Float32Array(n);let o=0;list.forEach(f=>{all.set(f,o);o+=f.length;});
+  let peak=0;for(let i=0;i<n;i++){const v=Math.abs(all[i]);if(v>peak)peak=v;}
+  const gain=peak>0&&peak<0.35?Math.min(8,0.7/peak):1;   // dheemi awaaz ko bada karo
+  const ratio=inRate/16000,m=Math.floor(n/ratio),out=new Int16Array(m);
+  for(let i=0;i<m;i++){
+    const a=Math.floor(i*ratio),b=Math.min(n,Math.floor((i+1)*ratio));let sum=0,c=0;
+    for(let j=a;j<b;j++){sum+=all[j];c++;}
+    const v=Math.max(-1,Math.min(1,(c?sum/c:0)*gain));out[i]=v<0?v*32768:v*32767;
+  }
+  const buf=new ArrayBuffer(44+m*2),dv=new DataView(buf);
+  const w=(off,str)=>{for(let i=0;i<str.length;i++)dv.setUint8(off+i,str.charCodeAt(i));};
+  w(0,'RIFF');dv.setUint32(4,36+m*2,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
+  dv.setUint32(24,16000,true);dv.setUint32(28,32000,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,m*2,true);
+  new Int16Array(buf,44).set(out);
+  return new Blob([buf],{type:'audio/wav'});
+}
+function startRecording(){
+  if(recording)return;
+  frames=preroll.slice();preroll=[];recording=true;recStart=Date.now();setStatus('Hearing…');
+}
+function stopRecording(){
+  if(!recording)return;
+  recording=false;const f=frames;frames=[];onRecorded(f);
+}
+async function onRecorded(list){
+  const spokeMs=lastVoice-recStart;
+  if(!active||muted||busy||spokeMs<MIN_SPEECH_MS||!list.length){if(!busy&&!muted)setStatus('Listening');return;}
+  const blob=toWav(list);
+  busy=true;setStatus('Samajh raha hu…');
+  try{
+    const fd=new FormData();fd.append('audio',blob,'voice.wav');const la=[...history].reverse().find(m=>m.role==='assistant');fd.append('context',la?la.content.slice(-150):'');
+    const r=await fetch('/api/transcribe',{method:'POST',body:fd});
+    if(r.status===503){noSarvam=true;busy=false;switchToBrowser();return;}
+    const d=await r.json();
+    if(d.text){sttFails=0;busy=false;await ask(d.text);return;}
+    if(r.status===502){sttFails++;addLine('STT error',(d.detail||d.error||'').toString().slice(0,200));if(sttFails>=2){busy=false;switchToBrowser();return;}}
+  }catch(e){addLine('System','Awaaz bhejne me dikkat.');}
+  busy=false;if(!muted)setStatus('Listening');
+}
+function vadLoop(){
+  if(!active||!analyser||!useSarvam)return;
+  const lvl=rms(),now=Date.now();
+  if(calib.length<10){calib.push(lvl);if(calib.length===10)noise=calib.reduce((a,b)=>a+b,0)/10;}
+  else if(!recording&&!busy&&!muted){noise=noise*0.98+Math.min(lvl,noise*1.5+0.005)*0.02;}
+  const thr=Math.max(0.02,noise*2.5);
+  if(!muted&&!busy&&Date.now()>=ignoreUntil&&calib.length>=10){
+    if(lvl>thr){lastVoice=now;if(!recording){if(!voiceStart)voiceStart=now;if(now-voiceStart>40)startRecording();}}
+    else if(!recording){voiceStart=0;}
+    if(recording&&(now-lastVoice>SILENCE_MS||now-recStart>MAX_MS)){voiceStart=0;stopRecording();}
+  }else if(recording&&(busy||muted)){voiceStart=0;recording=false;frames=[];}
+  loopTimer=setTimeout(vadLoop,30);
+}
+
+/* ---------- Start / controls ---------- */
+const MIC_OPTS={audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}};
+async function startSarvamEngine(){
+  try{stream=await navigator.mediaDevices.getUserMedia(MIC_OPTS);}
+  catch(e){hint.textContent='Mic permission band hai. Allow karke page reload karein.';setStatus('Mic blocked');return;}
+  useSarvam=true;calib=[];
+  actx=new (window.AudioContext||window.webkitAudioContext)();
+  if(actx.state==='suspended')actx.resume().catch(()=>{});
+  const src=actx.createMediaStreamSource(stream);analyser=actx.createAnalyser();analyser.fftSize=1024;src.connect(analyser);buf=new Uint8Array(analyser.fftSize);initPcm(src);
+  hint.textContent='Hindi me boliye — saaf awaaz me sun raha hu';setStatus('Listening');vadLoop();
+}
+async function switchToSarvam(why){
+  if(noSarvam||useSarvam||!active)return;
+  clearTimeout(epTimer);
+  if(rec){rec.onend=null;try{rec.abort()}catch(e){}rec=null;}
+  hint.textContent=why+' — Sarvam mic par ja raha hu';
+  await startSarvamEngine();
+}
+async function startMic(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){hint.textContent='Mic ke liye https ya localhost chahiye (http://IP-address par browser mic band rakhta hai).';setStatus('Mic blocked');return;}
+  if(useSarvam){await startSarvamEngine();return;}
+  /* Chrome speech ke liye sirf permission lo aur stream turant band karo: Android par mic ek hi jagah chal sakta hai, khula stream speech ko rok deta hai */
+  try{const t=await navigator.mediaDevices.getUserMedia({audio:true});t.getTracks().forEach(x=>x.stop());}
+  catch(e){hint.textContent='Mic permission band hai. Allow karke page reload karein.';setStatus('Mic blocked');return;}
+  hint.textContent='Mic start ho raha hai…';
+  startWebSpeech();
+}
+/* call lagte hi Abhi pehle bolta hai: pata chal jata hai ki awaaz bhi chal rahi hai */
+async function greet(){
+  busy=true;setStatus('Speaking');
+  const t='हाँ बोलिए, मैं सुन रहा हूँ।';
+  try{if(active)await speak(t);}catch(e){}
+  ignoreUntil=Date.now()+ECHO_GUARD_MS;baseIdx=lastLen;busy=false;
+  if(!muted&&active)setStatus('Listening');
+}
+$('#muteBtn').onclick=()=>{
+  muted=!muted;$('#muteBtn').classList.toggle('muted',muted);$('#muteBtn').textContent=muted?'✕':'⌕';
+  if(stream)stream.getAudioTracks().forEach(t=>t.enabled=!muted);
+  if(muted){setStatus('Muted');clearTimeout(epTimer);if(rec)try{rec.stop()}catch(e){}}
+  else{setStatus('Listening');if(!useSarvam)startWebSpeech();}
+};
+$('#speakerBtn').onclick=()=>{
+  voiceOn=!voiceOn;$('#speakerBtn').classList.toggle('muted',!voiceOn);$('#speakerBtn').textContent=voiceOn?'◉':'×';
+  if(!voiceOn)stopAudio();
+};
+function endCall(){
+  active=false;clearTimeout(loopTimer);clearTimeout(epTimer);
+  if(rec){rec.onend=null;try{rec.abort()}catch(e){}}
+  try{if(recorder&&recorder.state!=='inactive'){recorder.onstop=null;recorder.stop()}}catch(e){}
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  if(actx)try{actx.close()}catch(e){}
+  if(turnCancel)turnCancel();stopAudio();
+  location.href='/';
+}
+$('#endBtn').onclick=endCall;$('#backBtn').onclick=endCall;
+window.addEventListener('beforeunload',()=>{active=false;if(stream)stream.getTracks().forEach(t=>t.stop());});
+startMic();greet();               // mic turant, server ping ka intezaar nahi
+fetch('/api/call',{method:'POST',keepalive:true}).catch(()=>{});
+</script></body></html>
